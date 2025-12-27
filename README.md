@@ -14,7 +14,7 @@ Ever wanted to read an untranslated web novel? Well, with this tool, you can!
 
 ## Notes
 1. As with most python projects, creating a virtual environment is recommended
-2. I have not figured out a way to bypass the Booktoki CAPTCHA, Cloudfare was easy, but Booktoki's is a letter/number recognition system. If the CAPTCHA appears it will break your script, so you must scroll up in the terminal and find the last chapter it was scraping and restart at that chapter and do the CAPTCHA yourself FOR NOW. Update coming soon!
+2. Cloudflare CAPTCHA might appear in some countries, halting the code. Don't worry though, chapters are saved as you go! However, you will have to restart the code manually to continue scraping in the event of CAPTCHA.
 
 
 ## Setup
