@@ -26,7 +26,6 @@ Ever wanted to read an untranslated web novel? Well, with this tool, you can!
 pip install PySide6
 pip install selenium
 pip install seleniumbase
-pip install deep-translator
 ```
 
 
