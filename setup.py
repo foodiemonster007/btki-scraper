@@ -21,12 +21,6 @@ def setup():
   if (already_setup):
     print("Project already set up. Exiting setup script.")
 
-  # Header
-  print("\n**************** NovelScrape Setup ****************")
-  print("********      Created by 'BroknApples'       ******")
-  print("********   NovelScrape version: 2.0.0 Setup  ******")
-  print("***************************************************\n")
-
   # Ensure the user is ready to setup the project
   response: str = ""
   while (response != 'OK'):
