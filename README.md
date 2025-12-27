@@ -18,10 +18,9 @@ Ever wanted to read an untranslated web novel? Well, with this tool, you can!
 
 
 ## Setup
-### INSTALL CHROME in default location
-
-#### Installing packages
-* Run 'setup.py' which checks and installs the required packages to run this program OR run these terminal commands:
+1. Python: This is a programming language that makes the tool work. You'll need to install it from the official website (https://www.python.org/downloads/). Make sure to check the 2 boxes that say "Add Python to PATH" and "pip" during installation. This step lets your computer easily find and run the program.
+2. Install Chrome in default location
+3. Double-click 'setup.py' which checks and installs the required packages to run this program OR run these terminal commands:
 ```console
 pip install PySide6
 pip install selenium
