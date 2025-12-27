@@ -37,7 +37,7 @@ pip install seleniumbase
 ```console
 py raw_scrape.py
 ```
-### Using the Terminal/Console Edition
+### Using the Terminal/Console
 1. Enter the filename for your scraper settings
 2. Paste a booktoki link
 3. Enter a starting chapter (Default is 1)
