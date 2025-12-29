@@ -1,4 +1,4 @@
-# NovelScrape
+# RabbitScrape
 ## Overview
 Ever wanted to read an untranslated web novel? Well, with this tool, you can!
 
