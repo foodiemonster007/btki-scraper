@@ -1,5 +1,6 @@
 # Imports
 import time
+import random
 import re
 import configparser
 from enum import Enum
@@ -241,46 +242,50 @@ class Scraper():
 
   # === Function: _scrapeChapter ===
   def _scrapeChapter(self, url: str) -> str | None:
-    """
-    Does the actual scraping of chapter data. Utilizes '_chapter_text_body_htmldata'
+      """
+      Does the actual scraping of chapter data. Utilizes '_chapter_text_body_htmldata'
 
-    Params:
-      url: Url to scrape data from
+      Params:
+        url: Url to scrape data from
 
-    Returns:
-      str OR None: The URL to the initial chapter to scrape OR None if the webpage doesn't exist
-    """
-    
-    try:
-      self._driver.uc_open_with_reconnect(url, reconnect_time=self._RECONNECT_TIME)
-      self._driver.uc_gui_click_captcha()
+      Returns:
+        str OR None: The URL to the initial chapter to scrape OR None if the webpage doesn't exist
+      """
       
-      # Get the params to be used in 'find_element'
-      data_params: Scraper.HtmlElementData = self.getChapterTextBodyHtmlData()
-
       try:
-        # Get the target element
-        element = self._driver.find_element(data_params.by, data_params.element)
-      
-        # Return the element's text if possible
-        return element.text
+          self._driver.uc_open_with_reconnect(url, reconnect_time=self._RECONNECT_TIME)
+          self._driver.uc_gui_click_captcha()
 
-      # Element not found
-      except NoSuchElementException:
-        print("No such element.")
-        return None
+          # --- Random wait AFTER page load, before scraping ---
+          wait_after_load = random.uniform(5.0, 10.0)
+          print(f"Waiting {wait_after_load:.2f} seconds after page load before scraping...")
+          time.sleep(wait_after_load)
 
+          # Get the params to be used in 'find_element'
+          data_params: Scraper.HtmlElementData = self.getChapterTextBodyHtmlData()
 
-      except Exception as e:
-        # If there is no such element, print the error and return 'None'
-        print(f"Error: {e}")
-        return None
+          try:
+              # Get the target element
+              element = self._driver.find_element(data_params.by, data_params.element)
+
+              # Return the element's text if possible
+              return element.text
+
+          # Element not found
+          except NoSuchElementException:
+              print("No such element.")
+              return None
+
+          except Exception as e:
+              # If there is no such element, print the error and return 'None'
+              print(f"Error: {e}")
+              return None
+
+      # Web driver was closed
+      except WebDriverException:
+          print("Exited WebDriver early, returning None.")
+          return None
     
-    # Web driver was closed
-    except WebDriverException:
-      print("Exited WebDriver early, returning None.")
-      return None
-  
 
   # ******************************************** #
   # ****************** Public ****************** #
@@ -422,108 +427,105 @@ class Scraper():
 
   # === Function: scrape ===
   def scrape(self, start_idx: int = 0, end_idx: int = Limits.INT_MAX, format_text: bool = True, output_directory: str = None) -> list[str]:
-    """
-    Starts the scraping of a booktoki novel.
+      """
+      Starts the scraping of a booktoki novel.
 
-    NOTE: Must have called these functions:
-      'setNovelUrl()'
+      NOTE: Must have called these functions:
+        'setNovelUrl()'
 
-    Args:
-      start_idx: Chapter number to start the scrape.    NOTE: Constraints: (start_idx <= end_idx)
-      end_idx: Chapter to end the scrape at.    NOTE: Constraints: (end_idx >= start_idx)
-      format_text: Should the text be formatted into a more readable form (extra whitespaces, replace some characters, etc.)?
-      output_directory: Directory to save chapters to. If provided, chapters will be saved immediately.
+      Args:
+        start_idx: Chapter number to start the scrape.    NOTE: Constraints: (start_idx <= end_idx)
+        end_idx: Chapter to end the scrape at.    NOTE: Constraints: (end_idx >= start_idx)
+        format_text: Should the text be formatted into a more readable form (extra whitespaces, replace some characters, etc.)?
+        output_directory: Directory to save chapters to. If provided, chapters will be saved immediately.
 
-    Returns:
-      list[str]: List of the scraped novel chapters (if output_directory is None)
-    """
-    
-    # Setup driver
-    self.initializeWebDriver()
-
-    # Check if the proper variables have been instantiated
-    if (self.getNovelChapterListUrl() == ""):
-      return []
-
-    # Enforce index constraints
-    if (end_idx < start_idx):
-      end_idx = start_idx
-
-    # Print module separator
-    printModuleSeparator()
-
-    # Log starting message
-    print(
-      "Starting Scrape With Parameters: \n"
-      "\tNovel Url: " + self.getNovelChapterListUrl() + "\n"
-      "\tStarting Chapter: " + str(start_idx) + "\n"
-      "\tEnding Chapter: " + str(end_idx) + "\n"
-      "\tText Formatting: " + str(format_text) + "\n"
-      "\tOutput Directory: " + (output_directory if output_directory else "Not saving to files") + "\n"
-    )
-
-    # Create empty container for each chapter's text data (if returning list)
-    chapter_text: list[str] = []
-    
-    # Get the url for the first chapter
-    curr_url: str = self._getInitialChapterUrl(start_idx)
-
-    # Scrape each chapter in the specified range
-    for chapter_num in range (int(start_idx), int(end_idx) + 1):
-      # If the chapter url doesn't exist, leave loop to prevent errors
-      if (curr_url == None): 
-        print(f"No URL found for chapter #{chapter_num}. Stopping.")
-        break
-
-      # Log chapter scraping progress
-      print(f"Scraping chapter #{chapter_num}...")
-
-      # Get the text for this chapter
-      curr_chapter_text: str = self._scrapeChapter(curr_url)
-
-      # Format text, if set
-      if (format_text and curr_chapter_text):
-        curr_chapter_text = formatNovelText(curr_chapter_text)
-
-      # Check if we got data
-      if (curr_chapter_text == None): 
-        print(f"No data received for chapter #{chapter_num}. Stopping.")
-        break
-
-      # Save chapter immediately if output_directory is provided
-      if output_directory and curr_chapter_text:
-        chapter_num_str: str = str(chapter_num).zfill(4)
-        filename: str = f"{output_directory}/{chapter_num_str}.txt"
-        
-        try:
-          with open(filename, "w", encoding="utf-8") as f:
-            f.write(curr_chapter_text)
-          print(f"Saved chapter #{chapter_num} to {filename}")
-        except Exception as e:
-          print(f"Error saving chapter #{chapter_num}: {e}")
+      Returns:
+        list[str]: List of the scraped novel chapters (if output_directory is None)
+      """
       
-      # Add random delay between chapters (5.00 to 10.00 seconds)
-      if chapter_num < end_idx:  # Don't wait after the last chapter
-        import random
-        import time
-        wait_time = random.uniform(5.0, 10.0)
-        print(f"Waiting {wait_time:.2f} seconds before next chapter...")
-        time.sleep(wait_time)
+      # Setup driver
+      self.initializeWebDriver()
 
-      # Get the next chapter's URL
-      curr_url = self._findNextChapterUrl()
+      # Check if the proper variables have been instantiated
+      if (self.getNovelChapterListUrl() == ""):
+        return []
 
-    # Close driver
-    self.uninitializeWebDriver()
+      # Enforce index constraints
+      if (end_idx < start_idx):
+        end_idx = start_idx
 
-    # Log the scrape's completion
-    print("\nScraping Complete!")
+      # Print module separator
+      printModuleSeparator()
 
-    # Print module separator
-    printModuleSeparator()
+      # Log starting message
+      print(
+        "Starting Scrape With Parameters: \n"
+        "\tNovel Url: " + self.getNovelChapterListUrl() + "\n"
+        "\tStarting Chapter: " + str(start_idx) + "\n"
+        "\tEnding Chapter: " + str(end_idx) + "\n"
+        "\tText Formatting: " + str(format_text) + "\n"
+        "\tOutput Directory: " + (output_directory if output_directory else "Not saving to files") + "\n"
+      )
 
-    # Return the chapter data (if not saving to files)
-    return chapter_text
+      # Create empty container for each chapter's text data (if returning list)
+      chapter_text: list[str] = []
+      
+      # Get the url for the first chapter
+      curr_url: str = self._getInitialChapterUrl(start_idx)
+
+      # Scrape each chapter in the specified range
+      for chapter_num in range (int(start_idx), int(end_idx) + 1):
+        # If the chapter url doesn't exist, leave loop to prevent errors
+        if (curr_url == None): 
+          print(f"No URL found for chapter #{chapter_num}. Stopping.")
+          break
+
+        # Log chapter scraping progress
+        print(f"Scraping chapter #{chapter_num}...")
+
+        # Get the text for this chapter
+        curr_chapter_text: str = self._scrapeChapter(curr_url)
+
+        # Format text, if set
+        if (format_text and curr_chapter_text):
+          curr_chapter_text = formatNovelText(curr_chapter_text)
+
+        # Check if we got data
+        if (curr_chapter_text == None): 
+          print(f"No data received for chapter #{chapter_num}. Stopping.")
+          break
+
+        # Save chapter immediately if output_directory is provided
+        if output_directory and curr_chapter_text:
+          chapter_num_str: str = str(chapter_num).zfill(4)
+          filename: str = f"{output_directory}/{chapter_num_str}.txt"
+          
+          try:
+            with open(filename, "w", encoding="utf-8") as f:
+              f.write(curr_chapter_text)
+            print(f"Saved chapter #{chapter_num} to {filename}")
+          except Exception as e:
+            print(f"Error saving chapter #{chapter_num}: {e}")
+
+        # --- Fixed 1‑second wait AFTER scraping this chapter (including last) ---
+        wait_after = 1.0
+        print(f"Waiting {wait_after:.2f} seconds before moving to next URL...")
+        time.sleep(wait_after)
+
+        # Get the next chapter's URL
+        curr_url = self._findNextChapterUrl()
+
+      # Close driver
+      self.uninitializeWebDriver()
+
+      # Log the scrape's completion
+      print("\nScraping Complete!")
+
+      # Print module separator
+      printModuleSeparator()
+
+      # Return the chapter data (if not saving to files)
+      return chapter_text
   
 
   # ******************************************** #
