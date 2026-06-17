@@ -39,7 +39,7 @@ py raw_scrape.py
 ```
 ### Using the Terminal/Console
 1. Enter the filename for your scraper settings
-2. Paste a booktoki link
+2. Paste a booktoXX.com link
 3. Enter a starting chapter (Default is 1)
 4. Enter an ending chapter (Default is the latest release)
 5. Enter your translation directory
