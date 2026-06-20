@@ -25,18 +25,21 @@ def executeScrape(novel_url: str, scraper_settings_filename: str, start_idx: int
     output_directory: Directory to save chapters to
   """
 
-  # Create scraper object only
-  scraper: Scraper = Scraper()
-
-  # Set the scraper settings
+  # Create scraper object, loading the requested settings file directly
+  # rather than constructing with the default ('bookto.ini') and then
+  # immediately overwriting it with the chosen settings.
   if (scraper_settings_filename != ""):
-    scraper.loadScraperSettings(scraper_settings_filename)
+    scraper: Scraper = Scraper(scraper_settings_filename=scraper_settings_filename)
+  else:
+    scraper: Scraper = Scraper()
 
   # Initialize values in the scraper
   scraper.setNovelChapterListUrl(novel_url)
 
-  # Create the directory to save to
-  while not createDirectory(output_directory, False):
+  # Create the directory to save to. exist_ok=True so an already-existing
+  # output directory (e.g. resuming a previous scrape, or adding more
+  # chapters later) is reused rather than treated as an error.
+  while not createDirectory(output_directory, True):
     print("Invalid output directory name.")
 
     output_directory = ""
@@ -66,11 +69,11 @@ async def main() -> None:
 
   while running:
     scraper_settings_filename: str = "Uninitialized"
-    while ".txt" not in scraper_settings_filename and scraper_settings_filename != "":
+    while ".ini" not in scraper_settings_filename and scraper_settings_filename != "":
       scraper_settings_filename = ""
-      scraper_settings_filename = input("Enter the scraper settings filename (Press Enter for 'Booktoki'): ")
+      scraper_settings_filename = input("Enter the scraper settings filename (Press Enter for 'bookto'): ")
     if (scraper_settings_filename == ""):
-      scraper_settings_filename = "booktoki.ini"
+      scraper_settings_filename = "bookto.ini"
 
     # Get the novel URL
     # TODO: pip install validators and check if the url is a valid url before proceeding

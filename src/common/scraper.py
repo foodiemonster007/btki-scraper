@@ -8,7 +8,7 @@ from seleniumbase import Driver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import NoSuchElementException, WebDriverException
+from selenium.common.exceptions import NoSuchElementException, WebDriverException, TimeoutException
 from src.common.utils import (
   Limits,
   printModuleSeparator,
@@ -116,6 +116,9 @@ class Scraper():
   """ How long with nothing happening until the webpage attempts to reconnect """
   _RECONNECT_TIME: int = 6
 
+  """ How long to wait for elements to become present/visible (e.g. waiting on JS-rendered/Alpine-hydrated content) """
+  _ELEMENT_WAIT_TIME: int = 15
+
 
   # === Variables ===
   _wait = None
@@ -147,16 +150,27 @@ class Scraper():
       str | None: The href element embedded within the element OR None if there is no href element
     """
 
-    # Get the html content and search for whatever href element is present
+    # First, search the element's inner HTML for a nested <a href="...">.
+    # This is the original behavior and matches sources like booktoki,
+    # where the matched element is a wrapper/button containing an inner
+    # link element.
     html_content = element.get_attribute("innerHTML")
     match = re.search(r'href="(.*?)"', html_content)
 
-    # If there is some href element, then the button does contain a link!
-    if match: 
+    if match:
       return match.group(1)
-    # Else, return None since it doesn't exist
-    else:
-      return None
+
+    # Failsafe: if nothing was found inside, check whether the element
+    # itself is a link and carries its own 'href' attribute directly
+    # (e.g. readhive's chapter list items, where the <a> tag matched by
+    # the selector IS the link, with text/icons nested inside it as
+    # child elements rather than the href being nested).
+    own_href = element.get_attribute("href")
+    if own_href:
+      return own_href
+
+    # No href found either inside the element or on the element itself
+    return None
 
 
   # === Function: _getInitialChapterUrl ===
@@ -176,6 +190,19 @@ class Scraper():
       self._driver.uc_open_with_reconnect(self.getNovelChapterListUrl(), reconnect_time=self._RECONNECT_TIME)
       self._driver.uc_gui_click_captcha()
 
+      # --- Wait for Alpine.js to hydrate before touching the DOM ---
+      # Alpine sets 'x-cloak' attributes which are removed once Alpine has
+      # initialized and evaluated x-data/x-show. Tabbed content (like a
+      # hash-routed "releases" tab) stays hidden via x-cloak/x-show until
+      # Alpine runs, so waiting on raw element presence isn't enough; we
+      # need Alpine itself to have started up.
+      try:
+        self._wait.until(
+          lambda d: d.execute_script("return window.Alpine !== undefined && window.Alpine.version !== undefined")
+        )
+      except Exception as e:
+        print(f"Warning: Alpine.js hydration check timed out or failed: [{e}]")
+
       # # Loop through each <li> element and print its data-index attribute and text
       # for i, li in enumerate(list_items):
       #   data_index = li.get_attribute("data-index")
@@ -183,20 +210,38 @@ class Scraper():
       #   print(f"Item {i} - data-")
 
       try:
-        # Get the target <ul> element on the chapter list page
+        # Get the target <ul> element on the chapter list page.
+        # NOTE: We wait for VISIBILITY here rather than just presence,
+        # since Alpine-controlled tab content (x-show/x-cloak) can exist
+        # in the DOM while still being hidden until Alpine flips the
+        # tab state (e.g. via a #releases URL hash).
         list_body_params: Scraper.HtmlElementData = self.getChapterListBodyHtmlData()
-        ul_element = self._wait.until(EC.presence_of_element_located((list_body_params.by, list_body_params.element)))
+        ul_element = self._wait.until(EC.visibility_of_element_located((list_body_params.by, list_body_params.element)))
+
+        # --- Small settle delay before querying for list items ---
+        # Even after the container becomes visible, Alpine may still be
+        # finishing up rendering/binding child elements (x-for loops,
+        # swiper sliders, etc.) on the same tick. A brief pause here
+        # avoids racing that final render pass.
+        settle_wait = random.uniform(1.0, 2.0)
+        print(f"Waiting {settle_wait:.2f} seconds for page content to settle...")
+        time.sleep(settle_wait)
 
         # Find all <li> elements inside that <ul>
         list_item_params: Scraper.HtmlElementData = self.getChapterListItemHtmlData()
         list_items = ul_element.find_elements(list_item_params.by, list_item_params.element)
 
+        # If nothing was found, treat it the same as a missing element
+        if not list_items:
+          print("No chapter list items found.")
+          return None
+
         # Return the link OR 'None' if it doesn't exist | NOTE: Get the Nth from the end chapter num
         # TODO: Get the ending chapter number by taking the size of the list_items array (only if it was assigned 'Limits.INT_MAX' ofc)
         return self._getHrefFromHtmlElement(list_items[-chapter_num])
 
-      # Element not found
-      except NoSuchElementException:
+      # Element not found / not visible in time
+      except (NoSuchElementException, TimeoutException):
         print("No such element.")
         return None
 
@@ -293,17 +338,18 @@ class Scraper():
 
 
   # === Function: __init__ ===
-  def __init__(self, novel_url: str = "") -> None:
+  def __init__(self, novel_url: str = "", scraper_settings_filename: str = "booktoki.ini") -> None:
     """
     Constructor -> Sets novel chapter list url and elements to check now
 
     Args:
       novel_url: Url of the novel's chapter list to scrape
+      scraper_settings_filename: Name of the scraper settings file to load on construction.
+        Defaults to 'booktoki.ini' if not provided, preserving prior behavior.
     """
 
-    # Load the default settings
-    # TODO: Eventually add some actual '_default_settings' variable that can be used to change the default sraper settings
-    self.loadScraperSettings("booktoki.ini")
+    # Load the requested settings (or the default, if none was given)
+    self.loadScraperSettings(scraper_settings_filename)
 
     self.setNovelChapterListUrl(novel_url)
 
@@ -315,7 +361,7 @@ class Scraper():
     """
 
     self._driver = Driver(uc=True, headless=False)
-    self._wait = WebDriverWait(self._driver, self._RECONNECT_TIME)
+    self._wait = WebDriverWait(self._driver, self._ELEMENT_WAIT_TIME)
   
 
   # === Function: uninitializeWebDriver ===
@@ -677,4 +723,4 @@ class Scraper():
     Returns:
       HtmlElementData: Data structure that outlines the html element that corresponds to the 'chapter text body'
     """
-    return self._chapter_text_body_htmldata 
+    return self._chapter_text_body_htmldata
