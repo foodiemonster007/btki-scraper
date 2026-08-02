@@ -1,7 +1,9 @@
 # Imports
 import sys
 import os
+import re
 import configparser
+from bs4 import BeautifulSoup, NavigableString, Tag
 
 
 # === Class: OperatingSystems ===
@@ -25,24 +27,6 @@ class Limits():
   # === Constants ===
   INT_MAX: int = sys.maxsize
   INT_MIN: int = -sys.maxsize - 1
-
-
-# NOTE: Commented out since it's kinda useless; this only saves 1 line of work.
-# # === Function: loadConfigFile ===
-# def loadConfigFile(filename: str) -> configparser.ConfigParser:
-#   """
-#   Read a config file into a ConfigParser object
-
-#   Params:
-#     filename: Name of the config file to read
-  
-#   Returns:
-#     configparser.ConfigParser: Object used for config file parsing
-#   """
-
-#   config = configparser.ConfigParser()
-#   return config.read(filename)
-
 
 # === Function: splitRangeIntoChunks ===
 def splitRangeIntoChunks(start: int, end: int, chunk_count: int) -> list[tuple[int]]:
@@ -132,6 +116,126 @@ def formatNovelText(text: str) -> str:
   return text
 
 
+# === Function: formatNovelTextAsMarkdown ===
+def formatNovelTextAsMarkdown(html: str) -> str:
+  """
+  Convert a novel chapter's raw innerHTML into clean Markdown text.
+
+  Conversion rules:
+    - <em> and <i>  →  *italic*
+    - <b> and <strong>  →  **bold**
+    - <br>  →  newline
+    - <p>  →  paragraph (double newline after closing tag)
+    - Footnote inline ref  <a href="#_ftn1"  name="_ftnref1">[1]</a>  →  [^1]
+    - Footnote definition  <a href="#_ftnref1" name="_ftn1">[1]</a>   →  [^1]:
+    - *** or * * *  →  {sep}
+    - All other HTML tags are stripped (their text content is kept)
+    - HTML entities (e.g. &#8220;) are decoded to their Unicode equivalents
+    - Weird ellipsis character '…' is normalised to '...'
+    - Runs of more than two consecutive blank lines are collapsed to two
+
+  Params:
+    html: Raw innerHTML string from a Selenium element
+
+  Returns:
+    str: A Markdown-formatted string
+  """
+
+  def _node_to_md(node) -> str:
+    """Recursively walk a BeautifulSoup node tree and emit Markdown."""
+
+    # Plain text node — return as-is
+    if isinstance(node, NavigableString):
+      return str(node)
+
+    if not isinstance(node, Tag):
+      return ""
+
+    tag = node.name.lower() if node.name else ""
+
+    # Footnote links — must be checked before the generic anchor fallthrough.
+    #
+    # Two patterns used by noodlebrainsquad (and many WordPress novel themes):
+    #
+    #   Inline reference (in body text):
+    #     <a href="#_ftn1" name="_ftnref1">[1]</a>  →  [^1]
+    #
+    #   Footnote definition (at bottom of chapter):
+    #     <a href="#_ftnref1" name="_ftn1">[1]</a>  →  [^1]:
+    #
+    # The href is the reliable distinguisher:
+    #   href="#_ftnN"    → inline reference → [^N]
+    #   href="#_ftnrefN" → footnote definition → [^N]:
+    if tag == "a":
+      href = node.get("href", "")
+      # Match both patterns and extract the numeric index N
+      ftn_ref_match = re.match(r'^#_ftnref(\d+)$', href)   # definition anchor
+      ftn_match     = re.match(r'^#_ftn(\d+)$', href)      # inline reference
+
+      if ftn_ref_match:
+        # This is the footnote definition (bottom of chapter)
+        return f"[^{ftn_ref_match.group(1)}]:"
+      elif ftn_match:
+        # This is the inline citation (body text)
+        return f"[^{ftn_match.group(1)}]"
+      # Any other <a> tag: just recurse into its text, drop the link
+      return "".join(_node_to_md(c) for c in node.children)
+
+    # Block-level paragraph: recurse into children, then add blank line after
+    if tag == "p":
+      inner = "".join(_node_to_md(c) for c in node.children)
+      inner = inner.strip()
+      return inner + "\n\n" if inner else ""
+
+    # Line break
+    if tag == "br":
+      return "\n"
+
+    # Italic: <em> or <i>
+    if tag in ("em", "i"):
+      inner = "".join(_node_to_md(c) for c in node.children).strip()
+      return f"*{inner}*" if inner else ""
+
+    # Bold: <b> or <strong>
+    if tag in ("b", "strong"):
+      inner = "".join(_node_to_md(c) for c in node.children).strip()
+      return f"**{inner}**" if inner else ""
+
+    # Heading tags — treat as bold lines for novel context
+    if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
+      inner = "".join(_node_to_md(c) for c in node.children).strip()
+      return f"**{inner}**\n\n" if inner else ""
+
+    # Division / span / article / section and other containers:
+    # just recurse into children transparently
+    return "".join(_node_to_md(c) for c in node.children)
+
+  # Parse with BeautifulSoup, which also handles HTML entity decoding
+  # (e.g. &#8220; → ", &nbsp; → non-breaking space, etc.)
+  soup = BeautifulSoup(html, "html.parser")
+
+  # Remove ad/script/style noise that sometimes appears inside the scraped element
+  for tag in soup.find_all(["script", "style", "ins", "noscript"]):
+    tag.decompose()
+
+  # Walk the tree and build markdown
+  markdown = "".join(_node_to_md(node) for node in soup.children)
+
+  # Normalise non-breaking spaces left over from &nbsp; entities
+  markdown = markdown.replace("\u00a0", " ")
+
+  # Normalise ellipsis character
+  markdown = markdown.replace("…", "...")
+
+  # Replace scene-break separators with a consistent {sep} token.
+  markdown = re.sub(r'^\*[\s*]*\*[\s*]*\*$', '{sep}', markdown, flags=re.MULTILINE)
+
+  # Collapse runs of more than 2 consecutive blank lines into 2
+  markdown = re.sub(r"\n{3,}", "\n\n", markdown)
+
+  return markdown.strip()
+
+
 # === Function: getFileContentsByLine ===
 def getFileContentsByLine(filepath: str, remove_newlines: bool = True) -> list[str]:
   """
@@ -185,16 +289,3 @@ def printModuleSeparator() -> None:
   """
 
   print("\n*********************************************************\n")
-
-
-# NOTE: This is how a docstring should look
-"""
-Explain funtion purpose here.
-
-Args:
-  arg1: The first argument.
-  arg2: The second argument.
-
-Returns:
-  Nothing.
-"""

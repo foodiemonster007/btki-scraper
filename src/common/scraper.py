@@ -13,7 +13,8 @@ from src.common.utils import (
   Limits,
   printModuleSeparator,
   getFileContentsByLine,
-  formatNovelText
+  formatNovelText,
+  formatNovelTextAsMarkdown
 )
 
 
@@ -39,6 +40,7 @@ class Scraper():
 
       ID: str = "id"
       CLASS_NAME: str = "class name"
+      TAG_NAME: str = "tag name"
       X_PATH: str = "xpath"
       CSS_SELECTOR: str = "css selector"
 
@@ -81,6 +83,7 @@ class Scraper():
     BY_MAP: dict = {
       Bys.ID : By.ID,
       Bys.CLASS_NAME : By.CLASS_NAME,
+      Bys.TAG_NAME : By.TAG_NAME,
       Bys.X_PATH : By.XPATH,
       Bys.CSS_SELECTOR : By.CSS_SELECTOR
     }
@@ -313,8 +316,13 @@ class Scraper():
               # Get the target element
               element = self._driver.find_element(data_params.by, data_params.element)
 
-              # Return the element's text if possible
-              return element.text
+              # Return the element's raw innerHTML rather than .text so that
+              # inline HTML tags (<em>, <i>, <b>, <strong>, <br>, <p> etc.)
+              # are preserved for downstream markdown conversion.
+              # formatNovelTextAsMarkdown() will parse these into Markdown syntax;
+              # the plain formatNovelText() path (for old sources) still works
+              # because it receives .text from the caller's own branch.
+              return element.get_attribute("innerHTML")
 
           # Element not found
           except NoSuchElementException:
@@ -532,9 +540,17 @@ class Scraper():
         # Get the text for this chapter
         curr_chapter_text: str = self._scrapeChapter(curr_url)
 
-        # Format text, if set
+        # Format text, if set.
+        # Always uses Markdown formatting now: converts inline HTML tags
+        # (<em>/<i> → *italic*, <b>/<strong> → **bold**, etc.) and
+        # escapes square brackets. Falls back to plain text formatting
+        # only if the markdown formatter itself fails for any reason.
         if (format_text and curr_chapter_text):
-          curr_chapter_text = formatNovelText(curr_chapter_text)
+          try:
+            curr_chapter_text = formatNovelTextAsMarkdown(curr_chapter_text)
+          except Exception as e:
+            print(f"Warning: Markdown formatting failed ({e}), falling back to plain text formatting.")
+            curr_chapter_text = formatNovelText(curr_chapter_text)
 
         # Check if we got data
         if (curr_chapter_text == None): 
@@ -544,7 +560,7 @@ class Scraper():
         # Save chapter immediately if output_directory is provided
         if output_directory and curr_chapter_text:
           chapter_num_str: str = str(chapter_num).zfill(4)
-          filename: str = f"{output_directory}/{chapter_num_str}.txt"
+          filename: str = f"{output_directory}/{chapter_num_str}.md"
           
           try:
             with open(filename, "w", encoding="utf-8") as f:

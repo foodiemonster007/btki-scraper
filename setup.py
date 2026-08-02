@@ -11,6 +11,7 @@ SETUP_SCRIPT_FILENAME: str = "setup.py"
 """ NOTE: Change this to 'False' if you want to run the setup script again"""
 already_setup: bool = False
 
+
 # === Function: setup ===
 def setup():
   """
@@ -38,6 +39,7 @@ def setup():
   ensureModuleInstalled("PySide6")
   ensureModuleInstalled("selenium")
   ensureModuleInstalled("seleniumbase")
+  ensureModuleInstalled("beautifulsoup4")
 
   # Log module installing
   print("Module installation complete!")
@@ -46,6 +48,7 @@ def setup():
 
   # Footer
   print("\n*************************************************")
+
 
 # === Function: ensureModuleInstalled ===
 def ensureModuleInstalled(module_name: str, module_version: str | None = None):
@@ -93,6 +96,7 @@ def ensureModuleInstalled(module_name: str, module_version: str | None = None):
       print(f"Module '{module_name}' is still not importable after installation. Cannot proceed.")
       sys.exit(1)
 
+
 # === Function: installModule ===
 def installModule(module_name: str) -> None:
   """
@@ -107,6 +111,7 @@ def installModule(module_name: str) -> None:
   except subprocess.CalledProcessError:
     print(f"Failed to install '{module_name}'. Please install it manually.")
     sys.exit(1)
+
 
 def setAsAlreadySetup() -> None:
   # Modify the 'already_setup' variable to mark it as already ran
