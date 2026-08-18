@@ -117,7 +117,7 @@ def formatNovelText(text: str) -> str:
 
 
 # === Function: formatNovelTextAsMarkdown ===
-def formatNovelTextAsMarkdown(html: str) -> str:
+def formatNovelTextAsMarkdown(html: str, strip_trailing_plus: bool = False) -> str:
   """
   Convert a novel chapter's raw innerHTML into clean Markdown text.
 
@@ -125,7 +125,9 @@ def formatNovelTextAsMarkdown(html: str) -> str:
     - <em> and <i>  →  *italic*
     - <b> and <strong>  →  **bold**
     - <br>  →  newline
-    - <p>  →  paragraph (double newline after closing tag)
+    - <p>  →  paragraph (double newline after closing tag). If strip_trailing_plus is set,
+      a trailing lone '+' character on the paragraph (Wattpad bakes one onto the end of every
+      paragraph's raw text, seemingly as an anti-scraping watermark) is stripped first.
     - Footnote inline ref  <a href="#_ftn1"  name="_ftnref1">[1]</a>  →  [^1]
     - Footnote definition  <a href="#_ftnref1" name="_ftn1">[1]</a>   →  [^1]:
     - *** or * * *  →  {sep}
@@ -136,6 +138,7 @@ def formatNovelTextAsMarkdown(html: str) -> str:
 
   Params:
     html: Raw innerHTML string from a Selenium element
+    strip_trailing_plus: Strip a trailing lone '+' character from the end of every paragraph
 
   Returns:
     str: A Markdown-formatted string
@@ -185,6 +188,8 @@ def formatNovelTextAsMarkdown(html: str) -> str:
     if tag == "p":
       inner = "".join(_node_to_md(c) for c in node.children)
       inner = inner.strip()
+      if strip_trailing_plus and inner.endswith("+"):
+        inner = inner[:-1].rstrip()
       return inner + "\n\n" if inner else ""
 
     # Line break
@@ -205,6 +210,30 @@ def formatNovelTextAsMarkdown(html: str) -> str:
     if tag in ("h1", "h2", "h3", "h4", "h5", "h6"):
       inner = "".join(_node_to_md(c) for c in node.children).strip()
       return f"**{inner}**\n\n" if inner else ""
+
+    # Ordered list: number each <li> child (1. 2. 3. ...)
+    if tag == "ol":
+      start = node.get("start")
+      try:
+        counter = int(start) if start is not None else 1
+      except ValueError:
+        counter = 1
+      lines = []
+      for child in node.find_all("li", recursive=False):
+        inner = "".join(_node_to_md(c) for c in child.children).strip()
+        if inner:
+          lines.append(f"{counter}. {inner}")
+        counter += 1
+      return "\n".join(lines) + "\n\n" if lines else ""
+
+    # Unordered list: bullet each <li> child
+    if tag == "ul":
+      lines = []
+      for child in node.find_all("li", recursive=False):
+        inner = "".join(_node_to_md(c) for c in child.children).strip()
+        if inner:
+          lines.append(f"- {inner}")
+      return "\n".join(lines) + "\n\n" if lines else ""
 
     # Division / span / article / section and other containers:
     # just recurse into children transparently

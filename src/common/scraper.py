@@ -2,6 +2,7 @@
 import time
 import random
 import re
+import os
 import configparser
 from enum import Enum
 from seleniumbase import Driver
@@ -115,6 +116,28 @@ class Scraper():
   _SCRAPER_SETTINGS_CHAPTER_LIST_ITEM_HTMLDATA_HEADER: str = "ChapterListItemHtmlData"
   _SCRAPER_SETTINGS_NEXT_CHAPTER_BUTTON_HTMLDATA_HEADER: str = "NextChapterButtonHtmlData"
   _SCRAPER_SETTINGS_CHAPTER_TEXT_BODY_HTMLDATA_HEADER: str = "ChapterTextBodyHtmlData"
+  _SCRAPER_SETTINGS_STRIP_TRAILING_PLUS_KEY: str = "strip_trailing_plus"
+  _SCRAPER_SETTINGS_SCROLL_TO_BOTTOM_KEY: str = "scroll_to_bottom"
+  _SCRAPER_SETTINGS_INITIAL_CHAPTER_LOOKUP_HEADER: str = "InitialChapterLookupSettings"
+  _SCRAPER_SETTINGS_INITIAL_CHAPTER_LOOKUP_MODE_KEY: str = "mode"
+  _SCRAPER_SETTINGS_CHAPTER_LIST_JAVASCRIPT_HEADER: str = "ChapterListJavaScriptData"
+  _SCRAPER_SETTINGS_CHAPTER_LIST_JAVASCRIPT_SCRIPT_KEY: str = "script"
+  _SCRAPER_SETTINGS_MANUAL_TOC_HTML_HEADER: str = "ManualTocHtmlData"
+  _SCRAPER_SETTINGS_MANUAL_TOC_HTML_PATH_KEY: str = "path"
+  _SCRAPER_SETTINGS_LOGIN_HEADER: str = "LoginSettings"
+  _SCRAPER_SETTINGS_REQUIRE_MANUAL_LOGIN_KEY: str = "require_manual_login"
+  _SCRAPER_SETTINGS_LOGIN_URL_KEY: str = "login_url"
+
+  # === Subclass: InitialChapterLookupModes ===
+  class InitialChapterLookupModes():
+    """
+    Holds constants for the supported ways of finding the URL of the starting chapter
+    """
+
+    LIST: str = "list"                    # Scrape the (fully-rendered) chapter list, indexing from the end
+    DIRECT_GUESS: str = "direct_guess"     # Guess {novel_url}/chapter-{N}; ask the user if that fails
+    EMBEDDED_JSON: str = "embedded_json"   # Run a JS snippet that pulls an ordered URL list out of page state
+    MANUAL_HTML: str = "manual_html"       # Scrape a locally-saved copy of the (post-JS) chapter list HTML
 
   """ How long with nothing happening until the webpage attempts to reconnect """
   _RECONNECT_TIME: int = 6
@@ -139,6 +162,34 @@ class Scraper():
 
   """ The HTML data for the actual text of a chapter """
   _chapter_text_body_htmldata: HtmlElementData = HtmlElementData()
+
+  """ Strip a trailing lone '+' character from every paragraph of scraped chapter text (some
+  sources, e.g. Wattpad, bake one onto the end of every paragraph's raw text) """
+  _strip_trailing_plus_from_chapter_text: bool = False
+
+  """ Whether to repeatedly scroll to the bottom of the chapter page before scraping its text.
+  Some sources (e.g. Wattpad) only render/mount the rest of a chapter's content once it's been
+  scrolled into view, so grabbing innerHTML right after page-load can silently cut the chapter
+  short """
+  _scroll_to_bottom_before_scrape: bool = False
+
+  """ Which strategy to use for finding the starting chapter's URL | NOTE: Use InitialChapterLookupModes.XXX """
+  _initial_chapter_lookup_mode: str = "list"
+
+  """ JS snippet (mode=embedded_json only) that returns an ordered array of chapter URLs when run
+  against the loaded chapter-list page """
+  _chapter_list_javascript: str = ""
+
+  """ Local file path (mode=manual_html only) to a saved, post-JavaScript copy of the chapter list page's
+  HTML, scraped in place of live-fetching the chapter list """
+  _manual_toc_html_path: str = ""
+
+  """ Whether to pause and wait for the user to manually log in (in the visible browser window)
+  before scraping begins """
+  _require_manual_login: bool = False
+
+  """ URL to open for the user to log in at, if _require_manual_login is set """
+  _login_url: str = ""
 
 
   # === Function: _getHrefFromHtmlElement ===
@@ -187,6 +238,16 @@ class Scraper():
     Returns:
       str | None: The URL to the initial chapter to scrape OR None if the webpage doesn't exist
     """
+
+    # Sites whose chapter list can't be indexed like a fully-rendered list (paginated/lazily
+    # rendered, or the URL needs to be pulled from embedded page state / a manual HTML dump)
+    # use a different lookup strategy entirely.
+    if self._initial_chapter_lookup_mode == Scraper.InitialChapterLookupModes.DIRECT_GUESS:
+      return self._getInitialChapterUrlByDirectGuess(chapter_num)
+    if self._initial_chapter_lookup_mode == Scraper.InitialChapterLookupModes.EMBEDDED_JSON:
+      return self._getInitialChapterUrlByEmbeddedJavaScript(chapter_num)
+    if self._initial_chapter_lookup_mode == Scraper.InitialChapterLookupModes.MANUAL_HTML:
+      return self._getInitialChapterUrlFromManualHtml(chapter_num)
 
     # Open web novel chapter list page
     try:
@@ -259,6 +320,145 @@ class Scraper():
       return None
 
 
+  # === Function: _getInitialChapterUrlByDirectGuess ===
+  def _getInitialChapterUrlByDirectGuess(self, chapter_num: int) -> str | None:
+    """
+    Get the url to the initial chapter to scrape by directly guessing the chapter URL
+    (novel_url/chapter-N) instead of scraping the chapter list. Used for sites whose chapter
+    list is paginated/lazily rendered, so indexing into it directly isn't reliable.
+
+    If the guessed URL doesn't resolve to a valid chapter page, the user is asked to supply
+    the correct URL manually.
+
+    Params:
+      chapter_num: Chapter to start scraping on
+
+    Returns:
+      str | None: The URL to the initial chapter to scrape OR None if the user skips it
+    """
+
+    guessed_url: str = self.getNovelChapterListUrl().rstrip("/") + "/chapter-" + str(chapter_num)
+
+    try:
+      self._driver.uc_open_with_reconnect(guessed_url, reconnect_time=self._RECONNECT_TIME)
+      self._driver.uc_gui_click_captcha()
+
+      # If the chapter text body is present, the guess resolved to a real chapter page
+      text_body_params: Scraper.HtmlElementData = self.getChapterTextBodyHtmlData()
+      self._wait.until(EC.presence_of_element_located((text_body_params.by, text_body_params.element)))
+
+      return guessed_url
+
+    # Guessed URL didn't resolve to a chapter page (e.g. 404, or the chapter has a title
+    # slug appended and the bare number isn't enough)
+    except (NoSuchElementException, TimeoutException):
+      print(f"Could not find chapter #{chapter_num} at guessed URL: {guessed_url}")
+
+    # Web driver was closed
+    except WebDriverException:
+      print("Exited WebDriver early, returning None.")
+      return None
+
+    # Guess failed; ask the user for the correct URL instead
+    manual_url: str = input(f"Enter the correct URL for chapter #{chapter_num} (or press Enter to skip): ")
+    return manual_url if manual_url != "" else None
+
+
+  # === Function: _getInitialChapterUrlByEmbeddedJavaScript ===
+  def _getInitialChapterUrlByEmbeddedJavaScript(self, chapter_num: int) -> str | None:
+    """
+    Get the url to the initial chapter to scrape by running a JS snippet (configured via
+    ChapterListJavaScriptData) against the loaded chapter-list page. The snippet is expected to
+    return an array of chapter URLs, in ascending chapter order, pulled directly out of the
+    page's own embedded state (e.g. a server-rendered hydration payload) rather than scraped
+    from rendered/paginated DOM elements. Used for sites like Wattpad, which embed the full,
+    already-ordered chapter list as JSON in the initial page load.
+
+    Params:
+      chapter_num: Chapter to start scraping on (1-indexed)
+
+    Returns:
+      str | None: The URL to the initial chapter to scrape OR None if it couldn't be found
+    """
+
+    try:
+      self._driver.uc_open_with_reconnect(self.getNovelChapterListUrl(), reconnect_time=self._RECONNECT_TIME)
+      self._driver.uc_gui_click_captcha()
+
+      chapter_urls: list = self._driver.execute_script(self._chapter_list_javascript)
+
+      if not chapter_urls:
+        print("Embedded chapter list script returned no chapters.")
+        return None
+
+      if chapter_num < 1 or chapter_num > len(chapter_urls):
+        print(f"Chapter #{chapter_num} is out of range (found {len(chapter_urls)} chapters).")
+        return None
+
+      return chapter_urls[chapter_num - 1]
+
+    # Web driver was closed
+    except WebDriverException:
+      print("Exited WebDriver early, returning None.")
+      return None
+
+    # JS execution failed, or returned something unexpected
+    except Exception as e:
+      print(f"Error extracting embedded chapter list: [{e}]")
+      return None
+
+
+  # === Function: _getInitialChapterUrlFromManualHtml ===
+  def _getInitialChapterUrlFromManualHtml(self, chapter_num: int) -> str | None:
+    """
+    Get the url to the initial chapter to scrape by loading a locally-saved copy of the chapter
+    list page's (post-JavaScript) HTML instead of live-fetching it. Path is configured via
+    ManualTocHtmlData. Useful for sites whose rendered chapter list can't be reliably captured
+    live -- open the chapter list page in a normal browser, save its fully-rendered HTML source
+    to a file, and point the settings file at it.
+
+    Uses the same ChapterListBodyHtmlData/ChapterListItemHtmlData selectors and Nth-from-end
+    indexing as the default list-scraping mode.
+
+    Params:
+      chapter_num: Chapter to start scraping on
+
+    Returns:
+      str | None: The URL to the initial chapter to scrape OR None if it couldn't be found
+    """
+
+    if not self._manual_toc_html_path or not os.path.isfile(self._manual_toc_html_path):
+      print(f"Manual TOC HTML file not found: {self._manual_toc_html_path}")
+      return None
+
+    file_url: str = "file:///" + os.path.abspath(self._manual_toc_html_path).replace("\\", "/")
+
+    try:
+      self._driver.get(file_url)
+
+      list_body_params: Scraper.HtmlElementData = self.getChapterListBodyHtmlData()
+      ul_element = self._wait.until(EC.presence_of_element_located((list_body_params.by, list_body_params.element)))
+
+      list_item_params: Scraper.HtmlElementData = self.getChapterListItemHtmlData()
+      list_items = ul_element.find_elements(list_item_params.by, list_item_params.element)
+
+      if not list_items:
+        print("No chapter list items found in manual TOC HTML.")
+        return None
+
+      return self._getHrefFromHtmlElement(list_items[-chapter_num])
+
+    # Element not found / not visible in time
+    except (NoSuchElementException, TimeoutException):
+      print("No such element in manual TOC HTML.")
+      return None
+
+    # Web driver was closed
+    except WebDriverException:
+      print("Exited WebDriver early, returning None.")
+      return None
+
+
   # === Function: _findNextChapterUrl ===
   def _findNextChapterUrl(self) -> str | None:
     """
@@ -288,6 +488,40 @@ class Scraper():
       return None
 
 
+  # === Function: _scrollToBottomOfPage ===
+  def _scrollToBottomOfPage(self, max_iterations: int = 25, stable_iterations_required: int = 3, pause_seconds: float = 0.8) -> None:
+    """
+    Repeatedly scroll the current page to the bottom, waiting between scrolls, so that any
+    content which only mounts/renders once scrolled into view (lazy-loaded/virtualized content)
+    has a chance to load before the page is scraped. Stops once the page's scroll height stops
+    growing for a few scrolls in a row (i.e. there's nothing left to reveal), or after
+    max_iterations as a safety cap.
+
+    Params:
+      max_iterations: Hard cap on the number of scroll attempts
+      stable_iterations_required: How many consecutive scrolls with no height change before stopping
+      pause_seconds: How long to wait after each scroll for new content to render
+    """
+
+    previous_height: int = -1
+    stable_count: int = 0
+
+    for _ in range(max_iterations):
+      self._driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+      time.sleep(pause_seconds)
+
+      current_height: int = self._driver.execute_script("return document.body.scrollHeight;")
+
+      if current_height == previous_height:
+        stable_count += 1
+        if stable_count >= stable_iterations_required:
+          break
+      else:
+        stable_count = 0
+
+      previous_height = current_height
+
+
   # === Function: _scrapeChapter ===
   def _scrapeChapter(self, url: str) -> str | None:
       """
@@ -309,25 +543,33 @@ class Scraper():
           print(f"Waiting {wait_after_load:.2f} seconds after page load before scraping...")
           time.sleep(wait_after_load)
 
-          # Get the params to be used in 'find_element'
+          # Some sources only mount/render the rest of a chapter's content once it's been
+          # scrolled into view (e.g. Wattpad), so force that content to load before scraping
+          if self._scroll_to_bottom_before_scrape:
+            self._scrollToBottomOfPage()
+
+          # Get the params to be used in 'find_elements'
           data_params: Scraper.HtmlElementData = self.getChapterTextBodyHtmlData()
 
           try:
-              # Get the target element
-              element = self._driver.find_element(data_params.by, data_params.element)
+              # Get the target element(s). Using find_elements (plural) instead of a single
+              # find_element lets a selector match several separate content blocks (e.g.
+              # Wattpad splits one chapter's text across multiple '.page' containers) -- their
+              # innerHTML is concatenated in document order. For sources with a selector that
+              # matches exactly one wrapping container (the common case), this is identical to
+              # the old single-element behavior.
+              elements = self._driver.find_elements(data_params.by, data_params.element)
 
-              # Return the element's raw innerHTML rather than .text so that
-              # inline HTML tags (<em>, <i>, <b>, <strong>, <br>, <p> etc.)
-              # are preserved for downstream markdown conversion.
-              # formatNovelTextAsMarkdown() will parse these into Markdown syntax;
-              # the plain formatNovelText() path (for old sources) still works
-              # because it receives .text from the caller's own branch.
-              return element.get_attribute("innerHTML")
+              if not elements:
+                  print("No such element.")
+                  return None
 
-          # Element not found
-          except NoSuchElementException:
-              print("No such element.")
-              return None
+              # Return the raw innerHTML rather than .text so that inline HTML tags (<em>, <i>,
+              # <b>, <strong>, <br>, <p> etc.) are preserved for downstream markdown conversion.
+              # formatNovelTextAsMarkdown() will parse these into Markdown syntax; the plain
+              # formatNovelText() path (for old sources) still works because it receives .text
+              # from the caller's own branch.
+              return "".join(element.get_attribute("innerHTML") for element in elements)
 
           except Exception as e:
               # If there is no such element, print the error and return 'None'
@@ -434,6 +676,54 @@ class Scraper():
     self._chapter_text_body_htmldata.by = text_body_section.get(Scraper.HtmlElementData.BY).strip('"')
     self._chapter_text_body_htmldata.element = text_body_section.get(Scraper.HtmlElementData.ELEMENT).strip('"')
 
+    strip_trailing_plus_raw = text_body_section.get(Scraper._SCRAPER_SETTINGS_STRIP_TRAILING_PLUS_KEY)
+    self._strip_trailing_plus_from_chapter_text = (
+      strip_trailing_plus_raw is not None and strip_trailing_plus_raw.strip('"').strip().lower() in ("1", "yes", "true", "on")
+    )
+
+    scroll_to_bottom_raw = text_body_section.get(Scraper._SCRAPER_SETTINGS_SCROLL_TO_BOTTOM_KEY)
+    self._scroll_to_bottom_before_scrape = (
+      scroll_to_bottom_raw is not None and scroll_to_bottom_raw.strip('"').strip().lower() in ("1", "yes", "true", "on")
+    )
+
+    # Initial chapter lookup method (optional section; defaults to the old list-scraping behavior
+    # for settings files that don't define it)
+    self._initial_chapter_lookup_mode = Scraper.InitialChapterLookupModes.LIST
+    if config.has_section(Scraper._SCRAPER_SETTINGS_INITIAL_CHAPTER_LOOKUP_HEADER):
+      initial_chapter_lookup_section = config[Scraper._SCRAPER_SETTINGS_INITIAL_CHAPTER_LOOKUP_HEADER]
+      mode_raw = initial_chapter_lookup_section.get(Scraper._SCRAPER_SETTINGS_INITIAL_CHAPTER_LOOKUP_MODE_KEY)
+      if mode_raw is not None:
+        self._initial_chapter_lookup_mode = mode_raw.strip('"').strip().lower()
+
+    # JS snippet used to pull the chapter list directly out of page state (mode=embedded_json only)
+    self._chapter_list_javascript = ""
+    if config.has_section(Scraper._SCRAPER_SETTINGS_CHAPTER_LIST_JAVASCRIPT_HEADER):
+      chapter_list_javascript_section = config[Scraper._SCRAPER_SETTINGS_CHAPTER_LIST_JAVASCRIPT_HEADER]
+      script_raw = chapter_list_javascript_section.get(Scraper._SCRAPER_SETTINGS_CHAPTER_LIST_JAVASCRIPT_SCRIPT_KEY)
+      if script_raw is not None:
+        self._chapter_list_javascript = script_raw.strip('"')
+
+    # Local file path to a manually-saved copy of the chapter list page's HTML (mode=manual_html only)
+    self._manual_toc_html_path = ""
+    if config.has_section(Scraper._SCRAPER_SETTINGS_MANUAL_TOC_HTML_HEADER):
+      manual_toc_html_section = config[Scraper._SCRAPER_SETTINGS_MANUAL_TOC_HTML_HEADER]
+      path_raw = manual_toc_html_section.get(Scraper._SCRAPER_SETTINGS_MANUAL_TOC_HTML_PATH_KEY)
+      if path_raw is not None:
+        self._manual_toc_html_path = path_raw.strip('"')
+
+    # Whether to pause for a manual login before scraping starts (optional section; defaults to
+    # off for settings files that don't define it)
+    self._require_manual_login = False
+    self._login_url = ""
+    if config.has_section(Scraper._SCRAPER_SETTINGS_LOGIN_HEADER):
+      login_section = config[Scraper._SCRAPER_SETTINGS_LOGIN_HEADER]
+      require_manual_login_raw = login_section.get(Scraper._SCRAPER_SETTINGS_REQUIRE_MANUAL_LOGIN_KEY)
+      if require_manual_login_raw is not None:
+        self._require_manual_login = require_manual_login_raw.strip('"').strip().lower() in ("1", "yes", "true", "on")
+      login_url_raw = login_section.get(Scraper._SCRAPER_SETTINGS_LOGIN_URL_KEY)
+      if login_url_raw is not None:
+        self._login_url = login_url_raw.strip('"')
+
     # Print results
     print(f"[{Scraper._SCRAPER_SETTINGS_CHAPTER_LIST_BODY_HTMLDATA_HEADER}]: "
           f'\n{Scraper.HtmlElementData.BY} = "{self._chapter_list_body_htmldata.by}"'
@@ -453,6 +743,10 @@ class Scraper():
     print(f"[{Scraper._SCRAPER_SETTINGS_CHAPTER_TEXT_BODY_HTMLDATA_HEADER}]: "
           f'\n{Scraper.HtmlElementData.BY} = "{self._chapter_text_body_htmldata.by}"'
           f'\n{Scraper.HtmlElementData.ELEMENT} = "{self._chapter_text_body_htmldata.element}"'
+          "\n")
+
+    print(f"[{Scraper._SCRAPER_SETTINGS_INITIAL_CHAPTER_LOOKUP_HEADER}]: "
+          f'\n{Scraper._SCRAPER_SETTINGS_INITIAL_CHAPTER_LOOKUP_MODE_KEY} = "{self._initial_chapter_lookup_mode}"'
           "")
     
     # Apply the by map
@@ -499,6 +793,16 @@ class Scraper():
       
       # Setup driver
       self.initializeWebDriver()
+
+      # If configured, open a login page in the (visible) browser window and block here until
+      # the user confirms they've logged in, before any scraping begins. Some sources (e.g.
+      # Wattpad) serve a shorter/gated version of chapter content to anonymous sessions.
+      if self._require_manual_login:
+        if self._login_url:
+          self._driver.uc_open_with_reconnect(self._login_url, reconnect_time=self._RECONNECT_TIME)
+        printModuleSeparator()
+        input("Log in using the opened browser window, then press Enter here to continue scraping...")
+        printModuleSeparator()
 
       # Check if the proper variables have been instantiated
       if (self.getNovelChapterListUrl() == ""):
@@ -547,7 +851,7 @@ class Scraper():
         # only if the markdown formatter itself fails for any reason.
         if (format_text and curr_chapter_text):
           try:
-            curr_chapter_text = formatNovelTextAsMarkdown(curr_chapter_text)
+            curr_chapter_text = formatNovelTextAsMarkdown(curr_chapter_text, strip_trailing_plus=self._strip_trailing_plus_from_chapter_text)
           except Exception as e:
             print(f"Warning: Markdown formatting failed ({e}), falling back to plain text formatting.")
             curr_chapter_text = formatNovelText(curr_chapter_text)

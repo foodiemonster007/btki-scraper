@@ -68,12 +68,11 @@ async def main() -> None:
   running: bool = True # Is the application running
 
   while running:
-    scraper_settings_filename: str = "Uninitialized"
-    while ".ini" not in scraper_settings_filename and scraper_settings_filename != "":
-      scraper_settings_filename = ""
-      scraper_settings_filename = input("Enter the scraper settings filename (Press Enter for 'bookto'): ")
+    scraper_settings_filename: str = input("Enter the scraper settings filename (Press Enter for 'bookto'): ").strip()
     if (scraper_settings_filename == ""):
-      scraper_settings_filename = "bookto.ini"
+      scraper_settings_filename = "bookto"
+    if not scraper_settings_filename.endswith(".ini"):
+      scraper_settings_filename += ".ini"
 
     # Get the novel URL
     # TODO: pip install validators and check if the url is a valid url before proceeding
@@ -104,8 +103,8 @@ async def main() -> None:
     output_directory = OUTPUT_DIRECTORY_ROOT + "/" + output_directory
 
     # Scrape the novel
-    start = input("Start scrape? (y/n): ")
-    if (start == "y"):
+    start = input("Start scrape? (Y/n): ")
+    if (start == "y" or start == ""):
       # TODO: Fix the threading issues (can't safely create multiple browsers so only set threading for translation and writing to disk)
       thread_count = 1
 

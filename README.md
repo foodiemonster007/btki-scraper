@@ -39,11 +39,13 @@ py raw_scrape.py
 ```
 ### Using the Terminal/Console
 1. Enter the filename for your scraper settings
-2. Paste a booktoXX.com link
-3. Enter a starting chapter (Default is 1)
-4. Enter an ending chapter (Default is the latest release)
-5. Enter your translation directory
-6. Enter 'y' to start OR 'n' to close
-7. Wait until the script completes AND watch out for any Booktoki CAPTCHAs
-8. Check the 'scraped_novels/' directory for your novel
+2. choose a site source based on the .ini config files in the \cfg\scraper_settings folder.
+3. Paste the target website table of contents link
+4. Enter a starting chapter (Default is 1)
+5. Enter an ending chapter (Default is the latest release)
+6. Enter your translation directory
+7. Enter 'y' to start OR 'n' to close
+8. For some sites (e.g. wattpad), the code will prompt you to login
+9. Wait until the script completes
+10. Check the 'scraped_novels/' directory for your novel
 
